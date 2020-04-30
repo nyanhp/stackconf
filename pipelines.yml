@@ -1,0 +1,123 @@
+﻿name: $(BuildID)
+variables:
+  - group: BuildEnv
+trigger:
+  - master
+pr:
+  - master
+
+stages:
+  - stage: ValidationWindows
+    displayName: Validation Build Windows
+    dependsOn: []
+    jobs:
+      - job: Validation
+        displayName: Windows PR validation build
+        pool:
+          name: OnPremLab
+        workspace:
+          clean: all
+        steps:
+          - task: DotNetCoreCLI@2
+            name: publishapp
+            displayName: Build web app
+            inputs:
+              command: publish
+              publishWebProjects: true
+              projects : '**/*.csproj'
+              zipAfterPublish: false
+              arguments: '-o buildoutput'
+          - pwsh: '.\build\prereq.ps1'
+            env:
+              Engine: HyperV
+              Password: $(Password)
+            name: prereq
+            displayName: Download prerequisites
+          - pwsh: '.\build\lab.ps1 -LabName $(LabName) -Password $(Password)'
+            errorActionPreference: 'continue' # Optional. Options: stop, continue
+            env:
+              Engine: HyperV
+              Password: $(Password)
+            name: buildlab
+            displayName: Create validation environment
+          - pwsh: '.\build\validate.ps1 -LabName $(LabName)'
+            env:
+              Engine: HyperV
+              Password: $(Password)
+            name: validate
+            displayName: Run Pester validation
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'NUnit'
+              testResultsFiles: '*-test-results.xml' 
+              failTaskOnFailedTests: true
+          - pwsh: 'Remove-Lab $(LabName) -Confirm:$false'
+            name: removeLab
+            displayName: Remove validation environment
+  - stage: ValidationLinux
+    displayName: Validation Build Linux
+    dependsOn: []
+    jobs:
+      - job: Validation
+        displayName: Linux PR validation build
+        pool:
+          vmImage: ubuntu-latest
+        workspace:
+          clean: all
+        steps:
+          - task: DotNetCoreCLI@2
+            name: publishapp
+            displayName: Build web app
+            inputs:
+              command: publish
+              publishWebProjects: true
+              projects : '**/*.csproj'
+              zipAfterPublish: false
+              arguments: '-o buildoutput'
+          - pwsh: '.\build\prereq.ps1 -Verbose'
+            env:
+              Engine: Azure
+              Password: $(Password)
+              AzureServicePrincipal: $(AzureServicePrincipal)
+            name: prereq
+            displayName: Download prerequisites
+          - pwsh: '.\build\lab.ps1 -LabName $(LabName) -Password $(Password)'
+            errorActionPreference: 'continue'
+            env:
+              Engine: Azure
+              Password: $(Password)
+              AzureServicePrincipal: $(AzureServicePrincipal)
+            name: buildlab
+            displayName: Create validation environment
+          - pwsh: '.\build\validate.ps1 -LabName $(LabName)'
+            env:
+              Engine: Azure
+              Password: $(Password)
+              AzureServicePrincipal: $(AzureServicePrincipal)
+            name: validate
+            displayName: Run Pester validation
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'NUnit'
+              testResultsFiles: '*-test-results.xml' 
+              failTaskOnFailedTests: true
+          - pwsh: 'Remove-Lab $(LabName) -Confirm:$false'
+            name: removeLab
+            displayName: Remove validation environment
+  - stage: Deployment
+    displayName: Prod Deployment
+    dependsOn:
+      - ValidationWindows
+      - ValidationLinux
+    condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/master'))
+    jobs:
+      - job: Validation
+        displayName: Prod Deployment
+        pool:
+          vmImage: ubuntu-latest
+        workspace:
+          clean: all
+        steps:
+          - pwsh: Write-Host Done
+            name: Deployment
+            displayName: Deployment
